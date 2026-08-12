@@ -1,89 +1,102 @@
-# Flash Is Cheap, Core Is Not
+# Where the Bytes Live
 
-**A controlled latency and memory-hierarchy characterisation of flash-resident
-language model inference on an ESP32-S3.**
-
+**A memory-hierarchy characterisation of on-device language model inference on
+an ESP32-S3.** Transformer and recurrent families, 648 measured runs.
 
 ---
 
 ## Attribution
 
-**This repository is a measurement study built on someone else's system.**
+**The transformer half of this repository is built on someone else's system.**
 
-The PLE inference runtime, the firmware, the training and export pipeline, and
-the model architecture are the work of **Viacheslav Sierbov**
-([`slvDev/esp32-ai`](https://github.com/slvDev/esp32-ai)), released under the
-MIT licence. His copyright notice is retained in [`LICENSE`](LICENSE) and the
-derivation is described in [`NOTICE`](NOTICE).
+The PLE inference runtime, the ESP32 firmware, the training and export
+pipeline, and the transformer architecture are the work of **Viacheslav
+Sierbov** ([`slvDev/esp32-ai`](https://github.com/slvDev/esp32-ai)), released
+under the MIT licence. His copyright is retained in [`LICENSE`](LICENSE) and the
+derivation is itemised in [`NOTICE`](NOTICE).
 
-Our contribution is:
+**The recurrent half is ours** — `train_rnn.py`, `export_rnn.py`, `rnn.h`,
+`verify_rnn.c` and `esp32_rnn.ino` were written for this study so that a second
+architecture family could be measured under an identical protocol.
 
-- a controlled benchmark campaign over eleven model configurations, three CPU
-  clocks, two flash bus modes, two optimisation levels and three generation
-  lengths (497 runs, 492 completed);
-- an instrumentation correction to the device firmware, described below, which
-  changed measured throughput by up to 56% and invalidated two derived claims;
-- a two-parameter analytical latency model, fitted and validated on held-out
-  measurements;
-- the analysis, figures and write-up.
+Our contribution:
 
-The inference kernels are unmodified. Our firmware changes add build-config
-self-reporting, temperature logging, and the correction in
-[Instrumentation correction](#instrumentation-correction).
+- a controlled benchmark of **15 on-device configurations across two
+  architecture families**, over three CPU clocks, two flash bus modes, two
+  optimisation levels and three generation lengths — 648 runs, 643 completed;
+- an **instrumentation correction** to the upstream firmware that changed
+  measured throughput by up to 56% and invalidated two derived conclusions;
+- a **two-parameter analytical latency model**, validated on held-out
+  measurements across both families to under 0.5%;
+- a **causal demonstration** that position-dependent latency is produced by the
+  KV cache, established by removing the cache rather than by correlation;
+- a complete LSTM/GRU training, export, verification and inference stack for
+  microcontroller targets.
 
-The Per-Layer-Embedding idea originates in Google's Gemma 3n. The training
-corpus is TinyStories (Eldan & Li, [arXiv:2305.07759](https://arxiv.org/abs/2305.07759)).
+Per-Layer Embeddings originate in Google's Gemma 3n. The corpus is TinyStories
+(Eldan & Li, [arXiv:2305.07759](https://arxiv.org/abs/2305.07759)).
 
 ---
 
-## What we found
+## Findings
 
-**Model capacity placed in flash is nearly free; capacity placed in the compute
-core is expensive.**
+### 1. Capacity in flash is nearly free; capacity in the core is not
 
-At a fixed core budget, growing the flash-resident embedding table eightfold
-improves validation loss with no measurable latency cost. Growing the compute
-core instead improves loss by a similar amount but costs 57% of throughput.
+At fixed core budget, growing the flash-resident table eightfold improves
+quality with no measurable latency cost. Growing the core instead costs 57% of
+throughput for a similar gain. The two allocations do not merely trade off —
+one strictly dominates:
 
-The two allocations are not merely different points on a trade-off curve —
-one strictly dominates the other:
-
-| config | core | table | tok/s @240 | tok/s @80 | val loss |
+| config | core | table | tok/s @240 | @80 | val loss |
 |---|---|---|---|---|---|
 | `c2M`  | 2.00 M | 1.57 M | 7.08 | 2.70 | 2.044 |
 | `d256` | 1.50 M | 6.29 M | **8.82** | **3.41** | **2.031** |
 
-`d256` is faster *and* better, at every clock frequency tested. Six of eleven
-configurations lie on the quality–throughput Pareto frontier, and every
-dominated configuration is one that spent parameters on the core or on model
-width rather than on the table.
+Faster *and* better, at every clock. Six of eleven transformer configurations
+lie on the quality–throughput Pareto frontier; every dominated one spent
+parameters on the core or on width rather than on the table.
 
-### Why
+### 2. A two-parameter cost model, validated across both families
 
-A two-term cost model separates compute from memory by exploiting the fact that
-the CPU clock can be set independently of the flash and PSRAM interface clocks:
+Because the CPU clock is selectable independently of the flash and PSRAM
+interface clocks, per-token latency separates cleanly:
 
 ```
-t(f) = C · (240/f) + M
+t(f) = C * (240/f) + M
 ```
 
-Fitted on the 240 and 80 MHz points and validated on a **held-out** 160 MHz
-point, this predicts per-token latency to **0.48% mean / 0.61% max** error
-across all eleven configurations. The compute-bound fraction is
-**78.1–82.6%** (mean 80.0%), largely independent of how capacity is allocated.
+Fitted on the 240 and 80 MHz points, validated on a **held-out** 160 MHz point:
 
-Because roughly four fifths of the token is compute-bound, and the
-flash-resident table contributes only to the remaining fifth, growing the table
-barely touches the critical path.
+| family | configs | compute-bound | held-out error |
+|---|---|---|---|
+| transformer | 11 | 78.1–82.6% | 0.48% mean, 0.61% max |
+| recurrent | 4 | 84.3–85.2% | 0.33% mean, 0.43% max |
 
-The model is validated over 80–240 MHz. At 40 MHz it over-predicts by
-**12.9%** — below 80 MHz the SoC switches from PLL- to crystal-derived
-clocking, which alters APB timing and breaks the clock-invariance assumption.
+Roughly four fifths of each token is compute-bound, which is *why* flash-resident
+capacity is cheap. The recurrent family sits higher — no KV-cache traffic.
 
-### Memory tier attribution
+The model holds over 80–240 MHz. At 40 MHz it over-predicts by 12.9%: below
+80 MHz the SoC switches from PLL- to crystal-derived clocking, which alters APB
+timing and breaks the clock-invariance assumption.
 
-Halving flash bandwidth (QIO → DIO at 80 MHz) costs under 5% of total latency,
-even though **every weight in this runtime is read from flash on every token**:
+### 3. The KV cache causes position-dependent latency — shown by removing it
+
+| model | N=100 | N=400 | growth |
+|---|---|---|---|
+| `c1M` (transformer) | 76.8 ms | 100.0 ms | **+30.2%** |
+| `d64` (transformer) | 105.3 ms | 130.9 ms | **+24.3%** |
+| `c3M` (transformer) | 188.7 ms | 214.1 ms | **+13.5%** |
+| `lstm-c1M` | 70.3 ms | 70.3 ms | **0.0%** |
+| `lstm-c1.5M` | 98.9 ms | 98.9 ms | **0.0%** |
+| `lstm-c3M` | 176.9 ms | 176.9 ms | **0.0%** |
+
+Flat to three significant figures, across a 4x range of generation length. This
+is causal evidence by intervention, not correlation.
+
+### 4. Flash bandwidth barely matters, and the null control confirms it
+
+Halving flash bus width (QIO to DIO at 80 MHz) costs under 5% of total latency,
+even though **every weight is read from flash on every token**:
 
 | stage | reads from | `c3M` | `d256` |
 |---|---|---|---|
@@ -93,46 +106,65 @@ even though **every weight in this runtime is read from flash on every token**:
 | output head | **PSRAM** | **+0.7%** | **+0.0%** |
 | total | | +5.0% | +4.4% |
 
-The output head is the only stage staged into PSRAM at boot, and the only stage
-that does not respond. It serves as a null control for the per-stage timers.
+The head is the only PSRAM-resident stage and the only one that does not
+respond — a null control for the per-stage timers.
 
-### Other results
+### 5. Architecture trade-off, fully priced
 
-- **Compiler benefit is a function of kernel mix, not a fixed number.** `-O3`
-  over `-Os` ranges from 19.7% to 58.2% on the same board. A two-parameter fit
-  (`1.924×` on the int8 output-head kernel, `1.149×` elsewhere) predicts
-  held-out configurations to within 0.43%.
-- **Latency depends on generation length.** Mean per-token latency is linear in
-  N with a per-position increment of 0.155–0.170 ms (KV-cache growth). `d64`
-  runs at 9.49 / 8.78 / 7.64 tok/s at N = 100 / 200 / 400. A throughput figure
-  without N is under-specified.
-- **Two bottleneck regimes.** The 28.9M reference model (25,353-entry vocab) is
-  output-head dominated (55.9% of the token); the 4,096-vocab models are FFN
-  dominated. The cost model holds across both.
-- **Replication.** We measure the 28.9M reference at 9.42 tok/s and 104.1
-  ms/step, against 9.5 tok/s and 102.9 ms/step reported upstream — agreement
-  within 1.2% on an independent host and toolchain.
-- **Reproducibility.** Across 33 configuration–clock cells measured in two
-  separate sessions: max deviation **0.137%**, mean 0.047%.
+At matched core budget, recurrent models are faster and worse:
+
+| budget | transformer | recurrent | speed | quality |
+|---|---|---|---|---|
+| 1.0 M | `c1M` 11.83 tok/s, 2.111 | `lstm-c1M` 14.21, 2.799 | +20.2% | +0.688 |
+| 1.5 M | `d64` 8.79, 2.073 | `lstm-c1.5M` 10.11, 2.731 | +15.1% | +0.658 |
+| 1.5 M | `d64` 8.79, 2.073 | `gru-c1.5M` 10.40, 2.693 | +18.4% | +0.619 |
+| 3.0 M | `c3M` 5.07, 2.001 | `lstm-c3M` 5.65, 2.610 | +11.4% | +0.609 |
+
+Working state differs by three orders of magnitude — 3.15 MB of KV cache
+against 3.5–8.7 KB of recurrent state, leaving 7611 KB of PSRAM free versus
+4476 KB. So the design question becomes concrete: **0.62 nats costs 3.06 MB of
+PSRAM, 15% of throughput, and latency that grows 24% over a 400-token
+generation.**
+
+`gru-c1.5M` also strictly dominates `lstm-c1.5M` — faster *and* better, since
+three gates buy a wider hidden state for the same parameters.
+
+### 6. Compiler benefit is predicted by kernel mix
+
+`-O3` over `-Os` ranges from **19.7%** to **58.2%** on identical hardware.
+Fitting separate factors for the head and everything else, on the two extreme
+configurations only:
+
+```
+t(-Os) = 1.149 * t(non-head) + 1.924 * t(head)
+```
+
+predicts held-out configurations to within 0.43%. The head is an int8 dot
+product the compiler vectorises well; the int4 mixed-precision paths are not.
+
+### Reproducibility
+
+| family | cells | max deviation | mean |
+|---|---|---|---|
+| transformer | 33 | 0.137% | 0.047% |
+| recurrent | 12 | 0.101% | 0.034% |
+
+Measured across two sessions hours apart, with every firmware image and model
+payload rewritten between them.
 
 ---
 
 ## Instrumentation correction
 
-An initial campaign produced invalid results. We report the correction because
-it changed headline numbers and propagated into derived claims.
+An initial campaign produced invalid results. We report it because it changed
+headline numbers *and* propagated into conclusions.
 
-The device firmware overrides the portable output-head routine with a dual-core
-int8 kernel, and staged that head using a **compile-time vocabulary constant
-(25,353)** instead of the vocabulary field in the model header. For the
-4,096-vocab models this scanned 6.19× more rows than required and read past the
-end of the tensor when computing logits.
-
-Three symptoms were diagnostic: staged head size identical (3.35 MB) across
-models with different vocabularies; head latency invariant to an 8× vocabulary
-reduction; free PSRAM depressed by 2.81 MB in every affected configuration.
-
-Correcting the row bound to `min(V, VOCAB_N)`:
+The firmware's dual-core int8 output head staged rows using a compile-time
+vocabulary constant (25,353) instead of the model header's vocabulary field.
+For the 4,096-vocab models this scanned 6.19x more rows than required and read
+past the end of the tensor. Three symptoms were diagnostic: staged head size
+identical across models with different vocabularies; head latency invariant to
+an 8x vocabulary reduction; free PSRAM depressed by 2.81 MB everywhere.
 
 | | before | after |
 |---|---|---|
@@ -141,15 +173,13 @@ Correcting the row bound to `min(V, VOCAB_N)`:
 | head latency | 76.3 ms | 13.3 ms |
 | throughput (`d32`) | 5.69 tok/s | 8.88 tok/s |
 
-**Two derived claims changed as a result:**
+**Two derived claims changed:**
 
-1. An apparent *memory wall* at `D=160` — free PSRAM falling to 186 KB and
-   generation hanging — was an artefact of the inflated head allocation
-   combined with a fixed-size activation buffer. `D=160` runs normally with
+1. An apparent *memory wall* at `D=160` was an artefact of the inflated
+   allocation plus a fixed-size activation buffer. `D=160` runs normally with
    3582 KB free.
-2. The measured `-O3` benefit changed in **both directions** depending on
-   regime: down from ~46% to ~24% for the 4k-vocab models, up from ~46% to
-   58.2% for the reference model.
+2. The `-O3` benefit moved in **both directions** — down from ~46% to ~24% for
+   4k-vocab models, up to 58.2% for the reference model.
 
 `results_prefix_ARCHIVE.csv` retains the pre-correction data for the
 before/after comparison only. **It should not be used for anything else.**
@@ -160,28 +190,32 @@ before/after comparison only. **It should not be used for anything else.**
 
 ```
 CSE406/
-├── README.md
-├── LICENSE                 MIT — Sierbov (upstream) + this work
-├── NOTICE                  what is upstream, what is ours
+├── README.md   LICENSE   NOTICE
 ├── paper/
-│   └── methods_results.tex
-├── tools/                  our measurement code
-│   ├── campaign.py         build → flash → measure → CSV
+│   ├── methods_results.tex
+│   └── intro_related.tex
+├── tools/
+│   ├── campaign.py         transformer: build -> flash -> measure -> CSV
+│   ├── rnn_campaign.py     recurrent: same protocol
 │   ├── complete.py         reference model, compiler, N-sweep, bus, 40 MHz
 │   ├── patch_fw.py         idempotent firmware instrumentation patch
 │   └── analyze.py          figures, LaTeX tables, summary
 ├── results/
-│   ├── results_v2.csv      corrected dataset — 497 runs
+│   ├── results_v2.csv      648 runs, both families
 │   ├── results_prefix_ARCHIVE.csv    pre-correction, do not use
 │   ├── summary.txt
-│   └── figures/            *.png, tables.tex
-├── firmware/               upstream, with our instrumentation patch
-│   ├── esp32_llm/          sketch, vocab.h, display.h, partitions.csv
-│   ├── common/llm.h        portable inference core
-│   ├── host_verify/        C-vs-PyTorch verification
-│   └── bandwidth_bench/    memory-tier microbenchmark
-├── training/               upstream training + export pipeline
-│   ├── src/                train, export, quantize, model
+│   └── figures/            six figures + tables.tex
+├── firmware/
+│   ├── common/llm.h        PLE transformer core (upstream)
+│   ├── common/rnn.h        LSTM/GRU core (ours)
+│   ├── esp32_llm/          transformer sketch (upstream + our patches)
+│   ├── esp32_rnn/          recurrent sketch (ours)
+│   ├── host_verify/        C-vs-PyTorch verification, both families
+│   └── bandwidth_bench/    memory-tier microbenchmark (upstream)
+├── training/
+│   ├── src/                transformer pipeline (upstream)
+│   ├── src/train_rnn.py    recurrent training (ours)
+│   ├── src/export_rnn.py   recurrent export (ours)
 │   ├── data/prepare.py
 │   └── experiments/
 └── models/                 exported .bin, golden logits, training metrics
@@ -191,57 +225,71 @@ CSE406/
 
 ## Reproducing
 
-**Hardware.** ESP32-S3 with ≥16 MB flash and 8 MB octal PSRAM (we used an
-ESP32-S3-WROOM-1-N16R8). **Toolchain.** arduino-esp32 core 3.3.11,
-esptool 5.3.1, Python 3.13 with `pyserial`, `esptool`, `matplotlib`.
+**Hardware.** ESP32-S3 with at least 16 MB flash and 8 MB octal PSRAM (we used
+an ESP32-S3-WROOM-1-N16R8). **Toolchain.** arduino-esp32 core 3.3.11, esptool
+5.3.1, Python 3.13 with `pyserial`, `esptool`, `matplotlib`.
 
 ```bash
-python tools/patch_fw.py --dry-run     # inspect the instrumentation patch
-python tools/patch_fw.py               # apply (idempotent, backs up first)
+# firmware instrumentation (idempotent, backs up first)
+python tools/patch_fw.py --dry-run
+python tools/patch_fw.py
 
-python tools/campaign.py probe         # confirm FQBN options for your core
-python tools/campaign.py verify        # one build, one model, one run
-python tools/campaign.py sweep --session A    # 11 configs × 3 clocks × 5 runs
-python tools/campaign.py sweep --session B    # repeat after a cooldown
-python tools/campaign.py bus --session A      # QIO vs DIO
+# host verification before touching hardware
+gcc -O3 -I firmware/common -o verify     firmware/host_verify/verify.c     -lm
+gcc -O3 -I firmware/common -o verify_rnn firmware/host_verify/verify_rnn.c -lm
+./verify_rnn models/lstm-c1.5M-s0.bin models/lstm-c1.5M-s0_golden.txt
 
-python tools/complete.py ref           # 28.9M reference model
-python tools/complete.py opt           # -Os vs -O3
-python tools/complete.py ngen          # N = 100 / 400
-python tools/complete.py cpu40         # outside the model's validated range
+# transformer campaign
+python tools/campaign.py probe
+python tools/campaign.py verify
+python tools/campaign.py sweep --session A
+python tools/campaign.py sweep --session B
+python tools/campaign.py bus   --session A
+python tools/complete.py ref            # 28.9M reference model
+python tools/complete.py opt            # -Os vs -O3
+python tools/complete.py ngen           # N = 100 / 400
+python tools/complete.py cpu40          # outside the validated range
 
-python tools/analyze.py                # figures + tables + summary
+# recurrent campaign
+python tools/rnn_campaign.py verify
+python tools/rnn_campaign.py sweep --session A
+python tools/rnn_campaign.py sweep --session B
+python tools/rnn_campaign.py ngen  --session A
+
+python tools/analyze.py
 ```
 
 Every run records the firmware's **self-reported** build tag, CPU clock and
-flash clock, so a stale build cannot be silently mislabelled. Runs that fail
-are written with an explicit status rather than omitted — this is how we caught
-both the watchdog failures and the fact that the 120 MHz flash setting was
-never honoured by the module.
+flash clock, so a stale build cannot be silently mislabelled. Failed runs are
+written with an explicit status rather than omitted — that is how we caught both
+the watchdog failures and the fact that the 120 MHz flash setting was never
+honoured by the module.
 
 ---
 
 ## Limitations
 
-- **One board, one device.** Device-to-device variation is not characterised.
-- **One architecture family.** All configurations are PLE transformers from a
-  single codebase; we do not compare against dense or recurrent baselines
-  on-device.
-- **No energy measurement.** We report latency only. Joules per token on
-  MCU-class hardware remains open, and is the obvious next step.
-- **Quality is relative, not absolute.** Validation loss is comparable within
-  our 4,096-vocab family (shared tokenizer, matched training budget) but not
-  across tokenizers, and these models are far too small for instruction
-  following or question answering.
-- **Single seed.** Each configuration was trained once.
-- **Watchdog marginality.** Five of 497 runs failed, all at `c3M @ 80 MHz`,
+- **One board.** Device-to-device variation is not characterised.
+- **No energy measurement.** Latency and memory only. Joules per token on
+  MCU-class hardware remains open; a GPIO window marker is already present in
+  both sketches for future instrumentation.
+- **Dense transformer baselines are quality-only.** `baseline` (val 2.102) and
+  `bigcore` (1.938) were trained under the same protocol but require runtime
+  support the PLE firmware lacks, so they are not measured on-device.
+- **Quality is relative.** Validation loss is comparable within our
+  4,096-vocab family (shared tokenizer, matched training budget) but not across
+  tokenizers. These models are far too small for instruction following or
+  question answering.
+- **Single seed** per configuration.
+- **Watchdog marginality.** Five of 648 runs failed, all at `c3M @ 80 MHz`,
   where an eight-token watchdog feed interval approaches the 5 s FreeRTOS
-  timeout once position-dependent attention growth is accounted for. Reported
-  values use the successful runs.
+  timeout once position-dependent attention growth is included. Reported values
+  use the successful runs.
 
 ---
 
 ## Licence
 
-MIT. See [`LICENSE`](LICENSE) — it retains Viacheslav Sierbov's copyright for
-the upstream work and adds ours for the measurement code and analysis.
+MIT. See [`LICENSE`](LICENSE), which retains Viacheslav Sierbov's copyright for
+the upstream work and adds ours for the recurrent stack, measurement code and
+analysis.
