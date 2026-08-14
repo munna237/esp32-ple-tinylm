@@ -1,0 +1,86 @@
+# NOTICE
+
+This repository contains upstream work and original work. This file states
+which is which.
+
+## Upstream
+
+Copyright (c) 2026 Viacheslav Sierbov — MIT License
+https://github.com/slvDev/esp32-ai
+
+Obtained as a source snapshot. The upstream repository has since been
+reorganised; file paths and reported figures in current `main` differ from the
+snapshot this work is based on.
+
+Upstream, unmodified except where noted:
+
+    firmware/common/llm.h              portable PLE inference core
+    firmware/esp32_llm/vocab.h         25,353-entry tokenizer blob
+    firmware/esp32_llm/display.h       ST7789 output path (unused here)
+    firmware/esp32_llm/partitions.csv  custom flash layout
+    firmware/host_verify/verify.c      C-vs-PyTorch golden check
+    firmware/host_verify/ppl.c         perplexity evaluation
+    firmware/bandwidth_bench/          memory-tier microbenchmark
+    training/src/model.py              transformer definition
+    training/src/train.py              transformer training
+    training/src/export.py             transformer export
+    training/src/quantize.py           group-wise int4 quantisation
+    training/src/{budget,sample,analyze,gen_assets}.py
+    training/data/prepare.py           corpus download and BPE training
+    training/experiments/              sweep scripts
+
+### Modifications to upstream files
+
+`firmware/esp32_llm/esp32_llm.ino` — instrumentation only; inference kernels
+unmodified:
+
+1. Output-head row bound corrected from the compile-time constant `VOCAB_N`
+   to `min(model.c.vocab, VOCAB_N)`, with the greedy-argmax bound matched.
+   See "Instrumentation correction" in README.md.
+2. Per-token activation buffer changed from a fixed-size static array to a
+   heap allocation sized to the model's head width.
+3. Boot banner extended to self-report firmware tag, CPU clock, flash clock
+   and mode, and die temperature.
+4. `N_GENERATE` and the watchdog feed interval made settable at build time.
+5. GPIO window marker around the generation loop, for future power measurement.
+
+The applied patch is reproducible via `tools/patch_fw.py`, which is idempotent
+and reports which edits are already present.
+
+## Original work
+
+Copyright (c) 2026 Acramul Haque Kabir and Mohammad Mehedi Hasan Munna
+MIT License
+
+Recurrent language model stack, written for this study so that a second
+architecture family could be measured under a protocol identical to the
+transformer's:
+
+    training/src/train_rnn.py       LSTM/GRU training, hidden-size solver
+    training/src/export_rnn.py      int4 export + golden logits
+    firmware/common/rnn.h           portable LSTM/GRU inference core
+    firmware/host_verify/verify_rnn.c   C-vs-PyTorch verification
+    firmware/esp32_rnn/esp32_rnn.ino    device sketch
+
+The quantisation format (group-128 ragged int4 with fp16 scales) is
+deliberately identical to the upstream transformer format so that the two
+families share a packing implementation and can be compared without
+format-related confounds.
+
+Measurement and analysis:
+
+    tools/campaign.py       transformer benchmark harness
+    tools/rnn_campaign.py   recurrent benchmark harness
+    tools/complete.py       supplementary experiment driver
+    tools/patch_fw.py       firmware instrumentation patcher
+    tools/analyze.py        analysis, figures, tables
+    results/                measured data (648 runs)
+    paper/                  write-up
+
+## Third-party
+
+Per-Layer Embeddings originate in Google's Gemma 3n.
+
+TinyStories: Ronen Eldan and Yuanzhi Li, Microsoft Research, arXiv:2305.07759.
+The corpus is downloaded by `training/data/prepare.py` and is not
+redistributed here.
