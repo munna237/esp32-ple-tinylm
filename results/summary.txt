@@ -1,0 +1,41 @@
+DATA
+  OK rows                : 643
+  total rows             : 648  (5 non-OK)
+
+ROOFLINE - transformer (PLE)  (fit 240+80, held out 160)
+  configs                : 11
+  compute fraction       : 78.1% - 82.6%  (mean 80.0%)
+  held-out error         : max 0.61%, mean abs 0.48%
+
+ROOFLINE - recurrent (LSTM/GRU)  (fit 240+80, held out 160)
+  configs                : 4
+  compute fraction       : 84.3% - 85.2%  (mean 84.7%)
+  held-out error         : max 0.43%, mean abs 0.33%
+
+REPRODUCIBILITY - transformer (PLE)
+  cells                  : 33
+  max |deviation|        : 0.137%
+  mean |deviation|       : 0.047%
+
+REPRODUCIBILITY - recurrent (LSTM/GRU)
+  cells                  : 12
+  max |deviation|        : 0.101%
+  mean |deviation|       : 0.034%
+
+GENERATION-LENGTH DEPENDENCE (N=100 -> 400)
+  c1M            transformer    76.8 ->  100.0 ms  (+30.2%)
+  d64            transformer   105.3 ->  130.9 ms  (+24.3%)
+  c3M            transformer   188.7 ->  214.1 ms  (+13.5%)
+  lstm-c1M       recurrent      70.3 ->   70.4 ms  (+0.0%)
+  lstm-c1.5M     recurrent      98.9 ->   98.9 ms  (+0.0%)
+  lstm-c3M       recurrent     176.9 ->  176.9 ms  (+0.0%)
+
+BUS SWEEP (QIO80 -> DIO80)
+  c3M      total +5.0%   head (PSRAM null control) +0.7%
+  d256     total +4.4%   head (PSRAM null control) +0.0%
+
+MATCHED-BUDGET COMPARISON (240 MHz)
+  c1M    11.83 tok/s val 2.111  vs  lstm-c1M     14.21 tok/s val 2.799  (+20.2% speed, +0.688 val)
+  d64     8.79 tok/s val 2.073  vs  lstm-c1.5M   10.11 tok/s val 2.731  (+15.1% speed, +0.658 val)
+  d64     8.79 tok/s val 2.073  vs  gru-c1.5M    10.40 tok/s val 2.693  (+18.4% speed, +0.619 val)
+  c3M     5.07 tok/s val 2.001  vs  lstm-c3M      5.65 tok/s val 2.610  (+11.4% speed, +0.609 val)
