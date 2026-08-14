@@ -1,6 +1,11 @@
 MIT License
 
-Copyright (c) 2026 Mohammad Mehedi Hasan Munna Munna
+Copyright (c) 2026 Viacheslav Sierbov
+    — PLE inference runtime, ESP32-S3 firmware, training and export pipeline
+      (https://github.com/slvDev/esp32-ai)
+
+Copyright (c) 2026 Mohammad Mehedi Hasan Munna
+    — benchmark harness, instrumentation patches, analysis and write-up
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
