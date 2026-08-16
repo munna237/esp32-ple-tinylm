@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where the Bytes Live — LLM inference on an ESP32-S3</title>
+<meta name="description" content="Latency and memory characterisation of generative language model inference on an ESP32-S3, with an interactive cost model fitted from 648 measured runs.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#edeff2; --card:#f7f8fa; --ink:#101f2b; --muted:#5b6b78;
+  --rule:#c6cdd5; --flash:#c86f3e; --psram:#3e8e80; --compute:#3d6193;
+  --warn:#a8562f;
+  --disp:"Bricolage Grotesque",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+/* ---- micro label ---- */
+.lab{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--muted)}
+
+/* ---- header ---- */
+header{border-bottom:1px solid var(--rule);padding:20px 0}
+.hrow{display:flex;justify-content:space-between;align-items:baseline;gap:16px;flex-wrap:wrap}
+.mark{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.1em}
+.mark b{color:var(--flash)}
+header a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule)}
+header a:hover{border-color:var(--ink)}
+
+/* ---- hero ---- */
+.hero{padding:56px 0 32px}
+h1{font-family:var(--disp);font-weight:800;font-size:clamp(38px,6.4vw,68px);
+  line-height:.98;letter-spacing:-.025em;margin:14px 0 0;max-width:16ch}
+.thesis{font-size:clamp(17px,2vw,20px);max-width:62ch;margin:22px 0 0;color:#22333f}
+.thesis b{font-weight:600;background:linear-gradient(transparent 62%,#e2b79b 62%)}
+
+/* ---- stat strip ---- */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);
+  border:1px solid var(--rule);margin:40px 0 0}
+.stat{background:var(--paper);padding:16px 18px}
+.stat .n{font-family:var(--disp);font-weight:700;font-size:30px;line-height:1;
+  letter-spacing:-.02em;display:block;margin-bottom:6px}
+.stat .t{font-size:12.5px;color:var(--muted);line-height:1.4}
+
+/* ---- sections ---- */
+section{padding:64px 0;border-top:1px solid var(--rule)}
+h2{font-family:var(--disp);font-weight:700;font-size:clamp(26px,3.6vw,36px);
+  letter-spacing:-.02em;line-height:1.08;margin:10px 0 0;max-width:22ch}
+.sub{max-width:66ch;margin:16px 0 0;color:#22333f}
+
+/* ---- simulator ---- */
+.sim{background:var(--card);border:1px solid var(--rule);margin-top:28px}
+.simhead{display:flex;justify-content:space-between;align-items:center;gap:12px;
+  padding:12px 18px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+.simgrid{display:grid;grid-template-columns:300px 1fr;gap:0}
+.ctrls{padding:20px 18px;border-right:1px solid var(--rule)}
+.readout{padding:20px 22px;min-width:0}
+.fld{margin-bottom:19px}
+.fld:last-child{margin-bottom:0}
+.fld label{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:7px}
+.val{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--ink)}
+select{width:100%;font-family:var(--mono);font-size:13px;padding:8px 9px;
+  border:1px solid var(--rule);background:#fff;color:var(--ink);border-radius:0}
+input[type=range]{width:100%;accent-color:var(--compute);margin:0}
+.seg{display:flex;border:1px solid var(--rule);background:#fff}
+.seg button{flex:1;font-family:var(--mono);font-size:11.5px;font-weight:600;
+  padding:8px 4px;border:0;background:transparent;color:var(--muted);cursor:pointer;
+  letter-spacing:.05em}
+.seg button[aria-pressed=true]{background:var(--ink);color:#fff}
+
+/* big number */
+.big{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.big .v{font-family:var(--disp);font-weight:800;font-size:clamp(46px,8vw,76px);
+  line-height:.9;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.big .u{font-family:var(--mono);font-size:13px;color:var(--muted);font-weight:500}
+.second{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:10px}
+
+/* tier stack — the signature */
+.tiers{margin-top:24px;display:flex;flex-direction:column;gap:9px}
+.tier{display:grid;grid-template-columns:88px 1fr;gap:12px;align-items:center}
+.tname{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;text-align:right;color:var(--muted)}
+.hatch{background:repeating-linear-gradient(45deg,#e4e8ec 0 6px,#dde2e7 6px 12px)}
+.bar{position:relative;height:34px;background:#e4e8ec;border:1px solid var(--rule);overflow:hidden}
+.fill{position:absolute;inset:0 auto 0 0;display:flex;transition:width .32s cubic-bezier(.4,0,.2,1)}
+.seg1,.seg2{height:100%;transition:width .32s cubic-bezier(.4,0,.2,1)}
+.cap{position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  font-family:var(--mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px}
+.key{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;
+  color:var(--muted);letter-spacing:.04em}
+.sw{width:11px;height:11px;flex:none}
+
+/* stage bar */
+.stagebar{display:flex;height:26px;border:1px solid var(--rule);margin-top:8px}
+.stagebar div{position:relative}
+.stagebar span{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;font-family:var(--mono);font-size:9.5px;color:#fff;
+  white-space:nowrap;overflow:hidden}
+
+.note{font-family:var(--mono);font-size:11.5px;line-height:1.55;color:var(--muted);
+  padding:11px 18px;border-top:1px solid var(--rule);background:#f2f4f6}
+.note.alert{color:var(--warn);background:#faf1eb}
+
+/* findings */
+.find{display:grid;grid-template-columns:1fr 1fr;gap:36px 44px;margin-top:36px}
+.f h3{font-family:var(--disp);font-weight:600;font-size:19px;letter-spacing:-.01em;
+  margin:12px 0 8px;line-height:1.2}
+.f p{margin:0;font-size:14.5px;color:#22333f}
+.f img{width:100%;display:block;border:1px solid var(--rule);background:#fff;margin-top:14px}
+.fnum{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.12em;
+  color:var(--flash)}
+
+/* protocol */
+.steps{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--rule);
+  border:1px solid var(--rule);margin-top:28px}
+.step{background:var(--paper);padding:16px 14px}
+.step .lab{color:var(--compute);display:block;margin-bottom:8px}
+.step p{margin:0;font-size:13px;color:#22333f;line-height:1.45}
+
+/* caveat */
+.caveat{border:1px solid var(--flash);background:#faf2ec;padding:22px 24px;margin-top:28px}
+.caveat h3{font-family:var(--disp);font-weight:600;font-size:18px;margin:0 0 10px}
+.caveat ul{margin:0;padding-left:19px;font-size:14.5px;color:#22333f}
+.caveat li{margin-bottom:7px}
+.caveat li:last-child{margin-bottom:0}
+
+footer{border-top:1px solid var(--rule);padding:34px 0 52px;font-size:13px;color:var(--muted)}
+footer a{color:var(--ink)}
+code{font-family:var(--mono);font-size:.9em;background:#e4e8ec;padding:1px 5px}
+
+@media(max-width:820px){
+  .simgrid{grid-template-columns:1fr}
+  .ctrls{border-right:0;border-bottom:1px solid var(--rule)}
+  .stats{grid-template-columns:1fr 1fr}
+  .find{grid-template-columns:1fr}
+  .steps{grid-template-columns:1fr}
+}
+:focus-visible{outline:2px solid var(--compute);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hrow">
+    <div class="mark">ESP32&#8209;S3&#8209;WROOM&#8209;1&#8209;N16R8 &nbsp;/&nbsp; <b>648 RUNS</b></div>
+    <div class="mark"><a href="https://github.com/">repository</a> &nbsp; <a href="#paper">paper</a></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <span class="lab">Latency and memory characterisation</span>
+    <h1>Where the bytes live</h1>
+    <p class="thesis">A language model on a microcontroller keeps almost all of its parameters
+    in flash and reads them back every token. We measured what that costs.
+    The answer is a dominance relation rather than a trade-off:
+    <b>capacity placed in flash is nearly free, capacity placed in the compute core is not</b>.</p>
+
+    <div class="stats">
+      <div class="stat"><span class="n">648</span><span class="t">benchmark runs, 643 completed. Failures recorded, not dropped.</span></div>
+      <div class="stat"><span class="n">15</span><span class="t">on-device configurations across two architecture families.</span></div>
+      <div class="stat"><span class="n">0.14<small>%</small></span><span class="t">worst between-session deviation, board power-cycled between.</span></div>
+      <div class="stat"><span class="n">0.48<small>%</small></span><span class="t">mean error predicting a CPU clock held out of the fit.</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================= SIMULATOR ============================= -->
+<section id="model">
+<div class="wrap">
+  <span class="lab">Run the cost model</span>
+  <h2>Switch d32 to d256. Flash fills eightfold; latency moves 0.7&nbsp;%.</h2>
+  <p class="sub">This is the two-parameter model from the paper, with coefficients fitted per
+  configuration from the measured runs. It predicts per-token latency and memory residency for
+  clock, generation length and flash bus width. It is not connected to a board — see the note
+  under the panel.</p>
+
+  <div class="sim">
+    <div class="simhead">
+      <span class="lab">Predicted, not live</span>
+      <span class="lab" id="fitline">&nbsp;</span>
+    </div>
+
+    <div class="simgrid">
+      <div class="ctrls">
+        <div class="fld">
+          <label for="cfg"><span class="lab">Configuration</span></label>
+          <select id="cfg"></select>
+        </div>
+        <div class="fld">
+          <label for="clk"><span class="lab">CPU clock</span><span class="val" id="clkv">240 MHz</span></label>
+          <input type="range" id="clk" min="40" max="240" step="20" value="240">
+        </div>
+        <div class="fld">
+          <label for="ngen"><span class="lab">Generation length</span><span class="val" id="ngenv">200 tokens</span></label>
+          <input type="range" id="ngen" min="50" max="500" step="25" value="200">
+        </div>
+        <div class="fld">
+          <label><span class="lab">Flash bus</span></label>
+          <div class="seg" role="group" aria-label="Flash bus width">
+            <button id="qio" aria-pressed="true">QIO &middot; 4-bit</button>
+            <button id="dio" aria-pressed="false">DIO &middot; 2-bit</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="readout">
+        <div class="big">
+          <span class="v" id="tok">8.82</span>
+          <span class="u">tokens / second<br><span id="mspt">113.4 ms per token</span></span>
+        </div>
+
+        <div class="second" id="paramline">&nbsp;</div>
+
+        <div class="tiers">
+          <div class="tier">
+            <span class="tname">Flash</span>
+            <div class="bar"><div class="fill" id="fFlash"><div class="seg1" style="background:var(--flash)"></div></div>
+            <span class="cap" id="cFlash"></span></div>
+          </div>
+          <div class="tier">
+            <span class="tname">PSRAM</span>
+            <div class="bar"><div class="fill" id="fPsram">
+              <div class="seg1" style="background:var(--psram)"></div>
+              <div class="seg2" style="background:#8fbfb6"></div>
+              <div class="seg2" style="background:#cfd6dd"></div></div>
+            <span class="cap" id="cPsram"></span></div>
+          </div>
+          <div class="tier">
+            <span class="tname">SRAM</span>
+            <div class="bar hatch"><span class="cap">512.0 KiB &middot; not instrumented</span></div>
+          </div>
+        </div>
+
+        <div class="legend">
+          <span class="key"><span class="sw" style="background:var(--flash)"></span>model payload, int4</span>
+          <span class="key"><span class="sw" style="background:var(--psram)"></span>output head, int8 &middot; measured</span>
+          <span class="key"><span class="sw" style="background:#8fbfb6"></span>KV cache / recurrent state</span>
+          <span class="key"><span class="sw" style="background:#cfd6dd"></span>allocator overhead</span>
+        </div>
+
+        <div style="margin-top:22px">
+          <span class="lab" id="stagelab">Measured stage split &middot; 240 MHz, N=200</span>
+          <div class="stagebar" id="stages"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note" id="note"></div>
+    <div class="note">Coefficients come from 648 runs on one board. The clock term is validated
+    against a held-out 160&nbsp;MHz measurement; the generation-length term is calibrated on three
+    transformer sweeps and reproduces them to 1&nbsp;%. The DIO penalty was measured at an 80&nbsp;MHz flash clock with the CPU at 240&nbsp;MHz,
+    and is applied as a flat multiplier at other CPU clocks.</div>
+  </div>
+</div>
+</section>
+
+<!-- ============================= FINDINGS ============================= -->
+<section id="findings">
+<div class="wrap">
+  <span class="lab">What the measurements show</span>
+  <h2>Four results, each with a control</h2>
+
+  <div class="find">
+    <div class="f">
+      <span class="fnum">01 &middot; DOMINANCE</span>
+      <h3>Flash-resident capacity is nearly free</h3>
+      <p>At a fixed core budget, growing the per-layer table eightfold costs under 0.7&nbsp;% of
+      throughput. A configuration with 25&nbsp;% fewer core parameters and four times the table is
+      both faster and better than its core-heavy counterpart at every clock tested. Six of eleven
+      transformer configurations sit on the frontier; every dominated one spent parameters on the
+      core or on width instead.</p>
+      <img src="figures/fig1_pareto.png" alt="Validation loss against throughput, with the Pareto frontier marked.">
+    </div>
+
+    <div class="f">
+      <span class="fnum">02 &middot; COST MODEL</span>
+      <h3>Four fifths of a token is compute-bound</h3>
+      <p>Per-token latency splits into a component that scales with the clock and a remainder that
+      does not. Fitting on two clocks and validating on a third gives 0.48&nbsp;% mean error across
+      both families. The model holds from 80 to 240&nbsp;MHz and breaks below that, where the flash
+      interface stops tracking the CPU.</p>
+      <img src="figures/fig3_clockscale.png" alt="Fitted latency lines with the held-out 160 MHz points and per-configuration error.">
+    </div>
+
+    <div class="f">
+      <span class="fnum">03 &middot; ATTRIBUTION</span>
+      <h3>Halving flash bandwidth costs under 5&nbsp;%</h3>
+      <p>Every weight is read from flash on every token, yet narrowing the bus from quad to dual
+      I/O changes total latency by 4.4–5.0&nbsp;%. The output head is the only stage resident in
+      PSRAM and the only one that does not respond — a null control confirming the per-stage timers
+      attribute cost to the right memory tier.</p>
+      <img src="figures/fig4_bus.png" alt="Per-stage latency change when the flash bus is narrowed.">
+    </div>
+
+    <div class="f">
+      <span class="fnum">04 &middot; INTERVENTION</span>
+      <h3>The KV cache is what makes latency grow</h3>
+      <p>Transformer latency rises with position; recurrent latency does not. Rather than infer the
+      cause we built the counterfactual — LSTM and GRU models on the same task, tokenizer, embedding
+      and output head, differing only in carrying no cache. Their latency is constant to three
+      significant figures across a fourfold change in generation length.</p>
+      <img src="figures/fig6_ngen.png" alt="Latency against generation length for transformer and recurrent models.">
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- ============================= PROTOCOL ============================= -->
+<section id="protocol">
+<div class="wrap">
+  <span class="lab">How a number gets made</span>
+  <h2>One run, start to finish</h2>
+  <p class="sub">Each cell is five runs, and the whole sweep was executed twice in separate sessions
+  with the board powered down between them.</p>
+
+  <div class="steps">
+    <div class="step"><span class="lab">Verify</span><p>The C runtime is checked against dequantised PyTorch logits. Max absolute difference 1e&#8209;5. No board time until it passes.</p></div>
+    <div class="step"><span class="lab">Build</span><p>Clock, flash mode and optimisation level are set in the build, not at runtime.</p></div>
+    <div class="step"><span class="lab">Flash</span><p>Model payload written to <code>0x110000</code>, then a hardware reset over RTS.</p></div>
+    <div class="step"><span class="lab">Capture</span><p>200 tokens, greedy, fixed prompt. Five stage timers plus die temperature before and after.</p></div>
+    <div class="step"><span class="lab">Record</span><p>The firmware reports its own build tag and clocks into every row, so a setting that failed to take is visible in the data.</p></div>
+  </div>
+
+  <div class="caveat">
+    <h3>What this does not show</h3>
+    <ul>
+      <li><b>No live hardware.</b> The panel above evaluates a fitted model in your browser. Nothing here is connected to a board.</li>
+      <li><b>One device.</b> All measurements come from a single module. Device-to-device variation is not characterised.</li>
+      <li><b>No energy.</b> Latency and memory only. For battery-powered deployment, joules per token is the binding constraint and remains unmeasured on this hardware class.</li>
+      <li><b>Quality is relative.</b> Validation loss is comparable only within this 4096-token vocabulary family, which shares a tokenizer and training budget. These models generate fluent text in one narrow domain and cannot follow instructions or answer questions.</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<footer id="paper">
+  <div class="wrap">
+    <p style="margin:0 0 8px"><b style="color:var(--ink)">Where the Bytes Live: Latency and Memory
+    Characterisation of Generative Language Model Inference on an ESP32&#8209;S3</b></p>
+    <p style="margin:0">Data, analysis scripts, firmware patch, training pipeline and model binaries
+    are in the repository. The transformer runtime and firmware are the work of Viacheslav Sierbov,
+    MIT licence; this project contributes the characterisation. Per-Layer Embeddings originate in
+    Google's Gemma&nbsp;3n. Corpus is TinyStories.</p>
+  </div>
+</footer>
+
+<script>
+const DATA = {"c1M":{"family":"tf","cell":"transformer","d":128,"L":6,"FH":198,"P":64,"core":999360,"table":1572864,"stream":524288,"val":2.111,"bin":1607020,"t240":11.826,"t160":8.552,"t80":4.61,"C":66.18,"M":18.38,"err":0.61,"stages":{"input":2.9,"ple":5.8,"attn":37.37,"ffn":25.69,"head":12.29},"n100":13.02,"n400":10.0,"t40":2.12,"os":9.248,"headMB":0.54,"psUsedKiB":3713},"d32":{"family":"tf","cell":"transformer","d":128,"L":6,"FH":447,"P":32,"core":1499296,"table":786432,"stream":524288,"val":2.096,"bin":1464132,"t240":8.885,"t160":6.362,"t80":3.41,"C":90.35,"M":22.2,"err":0.35,"stages":{"input":1.5,"ple":3.3,"attn":37.56,"ffn":57.5,"head":12.28},"t40":1.57,"os":7.154,"headMB":0.54,"psUsedKiB":3714},"d64":{"family":"tf","cell":"transformer","d":128,"L":6,"FH":415,"P":64,"core":1499328,"table":1572864,"stream":524288,"val":2.073,"bin":1865668,"t240":8.786,"t160":6.312,"t80":3.392,"C":90.5,"M":23.32,"err":0.4,"stages":{"input":2.9,"ple":5.9,"attn":38.94,"ffn":53.4,"head":12.28},"n100":9.494,"n400":7.64,"t40":1.56,"os":7.094,"headMB":0.54,"psUsedKiB":3716},"d128":{"family":"tf","cell":"transformer","d":128,"L":6,"FH":351,"P":128,"core":1499392,"table":3145728,"stream":524288,"val":2.062,"bin":2675396,"t240":8.836,"t160":6.352,"t80":3.41,"C":90.04,"M":23.13,"err":0.48,"stages":{"input":5.6,"ple":11.0,"attn":38.76,"ffn":45.0,"head":12.28},"os":7.126,"headMB":0.54,"psUsedKiB":3719},"d256":{"family":"tf","cell":"transformer","d":128,"L":6,"FH":223,"P":256,"core":1499520,"table":6291456,"stream":524288,"val":2.031,"bin":4297924,"t240":8.822,"t160":6.344,"t80":3.411,"C":89.91,"M":23.44,"err":0.43,"stages":{"input":11.0,"ple":21.8,"attn":38.88,"ffn":28.8,"head":12.46},"os":7.126,"qio":8.822,"dio":8.442,"headMB":0.54,"psUsedKiB":3727},"c2M":{"family":"tf","cell":"transformer","d":128,"L":6,"FH":632,"P":64,"core":1999296,"table":1572864,"stream":524288,"val":2.044,"bin":2122012,"t240":7.084,"t160":5.064,"t80":2.703,"C":114.4,"M":26.77,"err":0.45,"stages":{"input":2.9,"ple":5.8,"attn":38.74,"ffn":80.88,"head":12.28},"os":5.824,"headMB":0.54,"psUsedKiB":3718},"c3M":{"family":"tf","cell":"transformer","d":128,"L":6,"FH":1066,"P":64,"core":2999232,"table":1572864,"stream":524288,"val":2.001,"bin":2638540,"t240":5.072,"t160":3.61,"t80":1.913,"C":162.79,"M":34.37,"err":0.56,"stages":{"input":2.9,"ple":5.8,"attn":38.76,"ffn":136.78,"head":12.28},"n100":5.3,"n400":4.67,"os":4.254,"qio":5.074,"dio":4.836,"headMB":0.54,"psUsedKiB":3723},"L4":{"family":"tf","cell":"transformer","d":128,"L":4,"FH":740,"P":64,"core":1498816,"table":1048576,"stream":524288,"val":2.103,"bin":1590756,"t240":9.276,"t160":6.631,"t80":3.54,"C":87.34,"M":20.46,"err":0.44,"stages":{"input":2.0,"ple":3.9,"attn":25.96,"ffn":63.2,"head":12.28},"t40":1.64,"os":7.526,"headMB":0.54,"psUsedKiB":2694},"L8":{"family":"tf","cell":"transformer","d":128,"L":8,"FH":252,"P":64,"core":1498304,"table":2097152,"stream":524288,"val":2.064,"bin":2136980,"t240":8.402,"t160":6.072,"t80":3.28,"C":92.93,"M":26.09,"err":0.48,"stages":{"input":3.8,"ple":7.8,"attn":51.58,"ffn":43.1,"head":12.26},"os":6.744,"headMB":0.54,"psUsedKiB":4803},"D96":{"family":"tf","cell":"transformer","d":96,"L":6,"FH":674,"P":64,"core":1498336,"table":1572864,"stream":393216,"val":2.14,"bin":1802188,"t240":9.079,"t160":6.484,"t80":3.454,"C":89.69,"M":20.46,"err":0.49,"stages":{"input":2.3,"ple":4.5,"attn":26.14,"ffn":67.33,"head":9.37},"os":7.494,"headMB":0.41,"psUsedKiB":2814},"D160":{"family":"tf","cell":"transformer","d":160,"L":6,"FH":242,"P":64,"core":1498784,"table":1572864,"stream":655360,"val":2.039,"bin":1951356,"t240":8.273,"t160":5.971,"t80":3.214,"C":95.13,"M":25.74,"err":0.58,"stages":{"input":3.7,"ple":7.3,"attn":54.86,"ffn":39.3,"head":15.19},"os":6.552,"headMB":0.67,"psUsedKiB":4610},"lstm-c1M":{"family":"rnn","cell":"lstm","d":128,"L":3,"FH":208,"P":0,"core":1003520,"table":0,"stream":524288,"val":2.799,"bin":808900,"t240":14.21,"t160":10.041,"t80":5.292,"C":59.3,"M":11.08,"err":0.43,"stages":{"input":0.0,"ple":1.4,"attn":24.3,"ffn":31.9,"head":12.3},"n100":14.218,"n400":14.214,"headMB":0.54,"psUsedKiB":578},"lstm-c1.5M":{"family":"rnn","cell":"lstm","d":128,"L":3,"FH":258,"P":0,"core":1502720,"table":0,"stream":524288,"val":2.731,"bin":1077676,"t240":10.111,"t160":7.123,"t80":3.75,"C":83.88,"M":15.02,"err":0.32,"stages":{"input":0.0,"ple":1.8,"attn":36.0,"ffn":48.36,"head":12.29},"n100":10.114,"n400":10.11,"headMB":0.54,"psUsedKiB":581},"gru-c1.5M":{"family":"rnn","cell":"gru","d":128,"L":3,"FH":299,"P":0,"core":1499613,"table":0,"stream":524288,"val":2.693,"bin":1071274,"t240":10.401,"t160":7.332,"t80":3.86,"C":81.46,"M":14.68,"err":0.36,"stages":{"input":0.0,"ple":2.1,"attn":34.9,"ffn":46.5,"head":12.29},"headMB":0.54,"psUsedKiB":578},"lstm-c3M":{"family":"rnn","cell":"lstm","d":128,"L":3,"FH":371,"P":0,"core":2999292,"table":0,"stream":524288,"val":2.61,"bin":1853692,"t240":5.651,"t160":3.972,"t80":2.09,"C":150.75,"M":26.21,"err":0.23,"stages":{"input":0.0,"ple":2.5,"attn":68.0,"ffn":93.7,"head":12.29},"n100":5.654,"n400":5.652,"headMB":0.54,"psUsedKiB":588}};
+
+// calibrated on three transformer generation-length sweeps (see paper)
+const KV_K = 2.15e-4;      // ms per (layer x d_model x position)
+const DIO  = 1.047;        // measured 4.4-5.0% at 80 MHz
+const CAP  = {flash:16*1024*1024, psram:8*1024*1024, sram:512*1024};
+
+const $ = id => document.getElementById(id);
+let mode = 'qio';
+
+const sel = $('cfg');
+for (const k in DATA){
+  const o = document.createElement('option');
+  o.value = k;
+  o.textContent = k + '  \u00b7  ' + (DATA[k].family==='tf' ? 'transformer' : DATA[k].cell.toUpperCase());
+  sel.appendChild(o);
+}
+sel.value = 'd256';
+
+function fmtB(b){
+  if (b >= 1048576) return (b/1048576).toFixed(2)+' MiB';
+  if (b >= 1024) return (b/1024).toFixed(1)+' KiB';
+  return b+' B';
+}
+
+function memory(c){
+  const head = c.headMB * 1e6;                               // measured, staged at boot
+  const work = c.family === 'tf'
+      ? 2 * c.L * 512 * c.d * 4                              // KV cache, fp32, full context
+      : (c.cell === 'gru' ? 1 : 2) * c.L * c.FH * 4;         // recurrent state
+  const used = c.psUsedKiB * 1024;                           // measured PSRAM occupancy
+  return {flash:c.bin, head:head, work:work,
+          rest:Math.max(0, used - head - work), used:used};
+}
+
+function predict(c, f, N){
+  let t = c.C * (240/f) + c.M;                               // fitted two-term model
+  if (c.family === 'tf') t += KV_K * c.L * c.d * (N-200)/2 * (240/f);
+  if (mode === 'dio') t *= DIO;
+  return t;
+}
+
+function bar(el, capEl, parts, cap){
+  const total = parts.reduce((a,b)=>a+b,0);
+  const segs = el.children;
+  for (let i=0;i<segs.length;i++)
+    segs[i].style.width = (100 * (parts[i]||0) / Math.max(total,1)) + '%';
+  el.style.width = Math.min(100, 100*total/cap) + '%';
+  capEl.textContent = fmtB(total) + ' / ' + fmtB(cap);
+}
+
+// The recurrent firmware reuses the transformer timer slots for different work.
+// Mapping is documented at the top of esp32_rnn.ino.
+const STAGES = {
+  tf : [['input','input','#2c4a6b'],['ple','PLE','#c86f3e'],['attn','attention','#3d6193'],
+        ['ffn','FFN','#6a8db5'],['head','head','#3e8e80']],
+  rnn: [['input','input','#2c4a6b'],['attn','input path W\u1D62\u2095x','#3d6193'],
+        ['ffn','recurrent path W\u2095\u2095h + cell','#6a8db5'],
+        ['ple','output proj + RMSNorm','#c86f3e'],['head','head','#3e8e80']]
+};
+
+function render(){
+  const c = DATA[sel.value];
+  const f = +$('clk').value, N = +$('ngen').value;
+  $('clkv').textContent  = f + ' MHz';
+  $('ngenv').textContent = N + ' tokens';
+
+  const t = predict(c, f, N);
+  $('tok').textContent  = (1000/t).toFixed(2);
+  $('mspt').textContent = t.toFixed(1) + ' ms per token';
+
+  const tot = c.core + c.table + c.stream;
+  $('paramline').textContent =
+    c.core.toLocaleString() + ' core \u00b7 ' + c.table.toLocaleString() + ' table \u00b7 '
+    + c.stream.toLocaleString() + ' embedding  =  ' + (tot/1e6).toFixed(2)
+    + ' M parameters \u00b7 val loss ' + c.val.toFixed(3);
+  $('fitline').textContent =
+    'C=' + c.C.toFixed(1) + ' ms \u00b7 M=' + c.M.toFixed(1) + ' ms \u00b7 held-out err '
+    + c.err.toFixed(2) + '%';
+
+  const m = memory(c);
+  bar($('fFlash'), $('cFlash'), [m.flash], CAP.flash);
+  bar($('fPsram'), $('cPsram'), [m.head, m.work, m.rest], CAP.psram);
+
+  const sb = $('stages');
+  sb.innerHTML = '';
+  const list = STAGES[c.family];
+  const sum = list.reduce((a,[k])=>a + (c.stages[k]||0), 0);
+  list.forEach(([k,name,col])=>{
+    const v = c.stages[k] || 0;
+    const pc = 100*v/sum;
+    const el = document.createElement('div');
+    el.style.width = pc+'%';
+    el.style.background = col;
+    el.title = name + ' \u00b7 ' + v.toFixed(1) + ' ms';
+    el.innerHTML = '<span>' + (pc >= 14 ? name+' '+v.toFixed(0)+'ms' : (pc>=6 ? v.toFixed(0)+'ms' : '')) + '</span>';
+    sb.appendChild(el);
+  });
+
+  $('stagelab').textContent = c.family === 'tf'
+    ? 'Measured stage split \u00b7 240 MHz, N=200'
+    : 'Measured stage split \u00b7 240 MHz, N=200 \u00b7 recurrent timer slots remapped';
+
+  const n = $('note');
+  const psTot = m.used;
+  if (f < 80){
+    n.className = 'note alert';
+    n.textContent = 'Below 80 MHz the flash interface stops tracking the CPU. Measured at 40 MHz, '
+      + 'the model over-predicts throughput by 12.9 %. Treat this reading as an upper bound.';
+  } else if (psTot > CAP.psram){
+    n.className = 'note alert';
+    n.textContent = 'Working set exceeds 8 MiB of PSRAM. This configuration would not allocate.';
+  } else if (c.family === 'tf' && (N < 100 || N > 400)){
+    n.className = 'note alert';
+    n.textContent = 'Generation length is outside the measured 100\u2013400 token range. '
+      + 'The position term is extrapolated here.';
+  } else {
+    n.className = 'note';
+    n.textContent = c.family === 'tf'
+      ? 'Transformer. The KV cache holds ' + fmtB(m.work)
+        + ' at the full 512-token context and grows as the sequence fills.'
+      : 'Recurrent. State is ' + fmtB(m.work)
+        + ' and constant in generation length \u2014 roughly '
+        + Math.round(2*6*512*128*4/m.work) + '\u00d7 smaller than the KV cache it replaces.';
+  }
+}
+
+['cfg','clk','ngen'].forEach(id => $(id).addEventListener('input', render));
+$('qio').addEventListener('click', ()=>{mode='qio';
+  $('qio').setAttribute('aria-pressed','true'); $('dio').setAttribute('aria-pressed','false'); render();});
+$('dio').addEventListener('click', ()=>{mode='dio';
+  $('dio').setAttribute('aria-pressed','true'); $('qio').setAttribute('aria-pressed','false'); render();});
+render();
+</script>
+</body>
+</html>
